@@ -35,6 +35,13 @@ export function NotificationCenter({ isOpen, onClose, onNavigate }: Notification
       markNotificationAsRead(notification.id)
     }
     
+    // 对于反馈类型的通知，不关闭通知中心，而是打开详情弹窗
+    if (notification.link_type === 'feedback' && notification.link_id) {
+      onNavigate?.('feedback', notification.link_id)
+      // 不关闭通知中心，让用户看到详情
+      return
+    }
+    
     if (notification.link_type && notification.link_id) {
       onNavigate?.(notification.link_type, notification.link_id)
       onClose()

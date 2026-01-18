@@ -1,6 +1,19 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { User, Task, Question, Suggestion, TaskStatus, Feedback, Reply, Proposal, Vote, Notification, VoteOption } from '@/types'
+import { 
+  syncUsers, addUserToSupabase, updateUserInSupabase, deleteUserFromSupabase,
+  syncTasks, addTaskToSupabase, updateTaskInSupabase, deleteTaskFromSupabase,
+  syncQuestions, addQuestionToSupabase,
+  syncSuggestions, addSuggestionToSupabase, updateSuggestionInSupabase,
+  syncReplies, addReplyToSupabase,
+  syncProposals, addProposalToSupabase, updateProposalInSupabase, deleteProposalFromSupabase,
+  syncVotes, addVoteToSupabase,
+  syncNotifications, addNotificationToSupabase, updateNotificationInSupabase, deleteNotificationFromSupabase,
+  syncFeedbacks, addFeedbackToSupabase, updateFeedbackInSupabase, deleteFeedbackFromSupabase,
+  subscribeToTable
+} from '@/lib/supabase-sync'
+import { isSupabaseConfigured } from '@/lib/supabase'
 
 // 超级管理员固定账号
 export const SUPER_ADMIN: User = {
@@ -13,6 +26,12 @@ export const SUPER_ADMIN: User = {
 }
 
 interface AppState {
+  // 初始化状态
+  isInitialized: boolean
+  setInitialized: (initialized: boolean) => void
+  initializeFromSupabase: () => Promise<void>
+  syncAllData: () => Promise<void>
+  
   // 用户状态
   currentUser: User | null
   setCurrentUser: (user: User | null) => void
@@ -97,9 +116,112 @@ const sortTasks = (tasks: Task[]): Task[] => {
   })
 }
 
+// 组装任务数据（包含关联的提问、建议、回复）
+const assembleTasks = (
+  tasks: Task[], 
+  questions: Question[], 
+  suggestions: Suggestion[], 
+  replies: Reply[]
+): Task[] => {
+  return tasks.map(task => {
+    const taskQuestions = questions
+      .filter(q => q.task_id === task.id)
+      .map(q => ({
+        ...q,
+        replies: replies.filter(r => r.parent_type === 'question' && r.parent_id === q.id)
+      }))
+    
+    const taskSuggestions = suggestions
+      .filter(s => s.task_id === task.id)
+      .map(s => ({
+        ...s,
+        replies: replies.filter(r => r.parent_type === 'suggestion' && r.parent_id === s.id)
+      }))
+    
+    return {
+      ...task,
+      questions: taskQuestions,
+      suggestions: taskSuggestions
+    }
+  })
+}
+
+// 组装提案数据（包含投票）
+const assembleProposals = (proposals: Proposal[], votes: Vote[]): Proposal[] => {
+  return proposals.map(proposal => ({
+    ...proposal,
+    votes: votes.filter(v => v.proposal_id === proposal.id)
+  }))
+}
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
+      // 初始化状态
+      isInitialized: false,
+      setInitialized: (initialized) => set({ isInitialized: initialized }),
+      
+      initializeFromSupabase: async () => {
+        if (!isSupabaseConfigured() || get().isInitialized) return
+        await get().syncAllData()
+      },
+      
+      syncAllData: async () => {
+        if (!isSupabaseConfigured()) return
+        
+        try {
+          set({ isLoading: true })
+          
+          // 并行加载所有数据
+          const [users, tasks, questions, suggestions, replies, proposals, votes, notifications, feedbacks] = await Promise.all([
+            syncUsers(),
+            syncTasks(),
+            syncQuestions(),
+            syncSuggestions(),
+            syncReplies(),
+            syncProposals(),
+            syncVotes(),
+            syncNotifications(),
+            syncFeedbacks()
+          ])
+          
+          // 组装数据
+          const assembledTasks = assembleTasks(tasks, questions, suggestions, replies)
+          const assembledProposals = assembleProposals(proposals, votes)
+          
+          // 分离归档和非归档任务
+          const activeTasks = assembledTasks.filter(t => !t.is_archived)
+          const archivedTasks = assembledTasks.filter(t => t.is_archived)
+          
+          // 更新状态
+          set({
+            users,
+            tasks: sortTasks(activeTasks),
+            archivedTasks,
+            proposals: assembledProposals,
+            notifications,
+            feedbacks,
+            isInitialized: true,
+            isLoading: false
+          })
+
+          // 清理过期提案
+          const now = Date.now()
+          assembledProposals.forEach(proposal => {
+            if ((proposal.status === 'rejected' || proposal.status === 'approved') && proposal.auto_delete_at) {
+              if (new Date(proposal.auto_delete_at).getTime() < now) {
+                get().deleteProposal(proposal.id)
+              }
+            }
+          })
+          
+          console.log('✅ 数据已从 Supabase 同步')
+        } catch (error) {
+          console.error('❌ Supabase 同步失败:', error)
+          set({ isLoading: false })
+        }
+      },
+      
       // 用户状态
       currentUser: null,
       setCurrentUser: (user) => set({ currentUser: user }),
@@ -107,15 +229,24 @@ export const useAppStore = create<AppState>()(
       // 所有注册用户
       users: [],
       setUsers: (users) => set({ users }),
-      addUser: (user) => set((state) => ({ users: [...state.users, user] })),
-      updateUser: (id, updates) => set((state) => ({
-        users: state.users.map((u) => 
-          u.id === id ? { ...u, ...updates } : u
-        )
-      })),
-      deleteUser: (id) => set((state) => ({
-        users: state.users.filter((u) => u.id !== id)
-      })),
+      addUser: (user) => {
+        set((state) => ({ users: [...state.users, user] }))
+        addUserToSupabase(user)
+      },
+      updateUser: (id, updates) => {
+        set((state) => ({
+          users: state.users.map((u) => 
+            u.id === id ? { ...u, ...updates } : u
+          )
+        }))
+        updateUserInSupabase(id, updates)
+      },
+      deleteUser: (id) => {
+        set((state) => ({
+          users: state.users.filter((u) => u.id !== id)
+        }))
+        deleteUserFromSupabase(id)
+      },
       getUserByStudentId: (studentId) => {
         // 检查是否是超级管理员
         if (studentId === SUPER_ADMIN.studentId) {
@@ -131,98 +262,134 @@ export const useAppStore = create<AppState>()(
       setArchivedTasks: (tasks) => set({ archivedTasks: tasks }),
       
       // 任务操作
-      addTask: (task) => set((state) => ({ 
-        tasks: sortTasks([task, ...state.tasks])
-      })),
+      addTask: (task) => {
+        set((state) => ({ 
+          tasks: sortTasks([task, ...state.tasks])
+        }))
+        addTaskToSupabase(task)
+      },
       
-      updateTask: (id, updates) => set((state) => ({
-        tasks: sortTasks(state.tasks.map((t) => 
-          t.id === id ? { ...t, ...updates, updated_at: new Date().toISOString() } : t
-        ))
-      })),
+      updateTask: (id, updates) => {
+        set((state) => ({
+          tasks: sortTasks(state.tasks.map((t) => 
+            t.id === id ? { ...t, ...updates, updated_at: new Date().toISOString() } : t
+          ))
+        }))
+        updateTaskInSupabase(id, { ...updates, updated_at: new Date().toISOString() })
+      },
       
-      deleteTask: (id) => set((state) => ({
-        tasks: state.tasks.filter((t) => t.id !== id),
-        archivedTasks: state.archivedTasks.filter((t) => t.id !== id)
-      })),
-      
-      archiveTask: (id) => set((state) => {
-        const task = state.tasks.find((t) => t.id === id)
-        if (!task) return state
-        return {
+      deleteTask: (id) => {
+        set((state) => ({
           tasks: state.tasks.filter((t) => t.id !== id),
-          archivedTasks: [{ ...task, is_archived: true, status: 'completed' as TaskStatus }, ...state.archivedTasks]
-        }
-      }),
+          archivedTasks: state.archivedTasks.filter((t) => t.id !== id)
+        }))
+        deleteTaskFromSupabase(id)
+      },
       
-      restoreTask: (id) => set((state) => {
-        const task = state.archivedTasks.find((t) => t.id === id)
-        if (!task) return state
-        return {
+      archiveTask: (id) => {
+        const task = get().tasks.find((t) => t.id === id)
+        if (!task) return
+        
+        const archivedTask = { ...task, is_archived: true, status: 'completed' as TaskStatus }
+        set((state) => ({
+          tasks: state.tasks.filter((t) => t.id !== id),
+          archivedTasks: [archivedTask, ...state.archivedTasks]
+        }))
+        updateTaskInSupabase(id, { is_archived: true, status: 'completed' })
+      },
+      
+      restoreTask: (id) => {
+        const task = get().archivedTasks.find((t) => t.id === id)
+        if (!task) return
+        
+        const restoredTask = { ...task, is_archived: false, status: 'pending' as TaskStatus }
+        set((state) => ({
           archivedTasks: state.archivedTasks.filter((t) => t.id !== id),
-          tasks: sortTasks([{ ...task, is_archived: false, status: 'pending' as TaskStatus }, ...state.tasks])
-        }
-      }),
+          tasks: sortTasks([restoredTask, ...state.tasks])
+        }))
+        updateTaskInSupabase(id, { is_archived: false, status: 'pending' })
+      },
       
-      togglePinTask: (id) => set((state) => ({
-        tasks: sortTasks(state.tasks.map((t) => 
-          t.id === id ? { ...t, is_pinned: !t.is_pinned } : t
-        ))
-      })),
+      togglePinTask: (id) => {
+        const task = get().tasks.find((t) => t.id === id)
+        if (!task) return
+        
+        set((state) => ({
+          tasks: sortTasks(state.tasks.map((t) => 
+            t.id === id ? { ...t, is_pinned: !t.is_pinned } : t
+          ))
+        }))
+        updateTaskInSupabase(id, { is_pinned: !task.is_pinned })
+      },
       
-      updateTaskStatus: (id, status) => set((state) => ({
-        tasks: state.tasks.map((t) => 
-          t.id === id ? { ...t, status } : t
-        )
-      })),
+      updateTaskStatus: (id, status) => {
+        set((state) => ({
+          tasks: state.tasks.map((t) => 
+            t.id === id ? { ...t, status } : t
+          )
+        }))
+        updateTaskInSupabase(id, { status })
+      },
       
       // 提问操作
-      addQuestion: (taskId, question) => set((state) => ({
-        tasks: state.tasks.map((t) => 
-          t.id === taskId 
-            ? { ...t, questions: [...(t.questions || []), question] }
-            : t
-        )
-      })),
+      addQuestion: (taskId, question) => {
+        set((state) => ({
+          tasks: state.tasks.map((t) => 
+            t.id === taskId 
+              ? { ...t, questions: [...(t.questions || []), question] }
+              : t
+          )
+        }))
+        addQuestionToSupabase(question)
+      },
       
-      addReplyToQuestion: (taskId, questionId, reply) => set((state) => ({
-        tasks: state.tasks.map((t) => 
-          t.id === taskId 
-            ? {
-                ...t,
-                questions: t.questions?.map((q) =>
-                  q.id === questionId
-                    ? { ...q, replies: [...(q.replies || []), reply] }
-                    : q
-                )
-              }
-            : t
-        )
-      })),
+      addReplyToQuestion: (taskId, questionId, reply) => {
+        set((state) => ({
+          tasks: state.tasks.map((t) => 
+            t.id === taskId 
+              ? {
+                  ...t,
+                  questions: t.questions?.map((q) =>
+                    q.id === questionId
+                      ? { ...q, replies: [...(q.replies || []), reply] }
+                      : q
+                  )
+                }
+              : t
+          )
+        }))
+        addReplyToSupabase(reply)
+      },
       
       // 意见操作
-      addSuggestion: (taskId, suggestion) => set((state) => ({
-        tasks: state.tasks.map((t) => 
-          t.id === taskId 
-            ? { ...t, suggestions: [...(t.suggestions || []), suggestion] }
-            : t
-        )
-      })),
+      addSuggestion: (taskId, suggestion) => {
+        set((state) => ({
+          tasks: state.tasks.map((t) => 
+            t.id === taskId 
+              ? { ...t, suggestions: [...(t.suggestions || []), suggestion] }
+              : t
+          )
+        }))
+        addSuggestionToSupabase(suggestion)
+      },
       
-      addReplyToSuggestion: (taskId, suggestionId, reply) => set((state) => ({
-        tasks: state.tasks.map((t) => 
-          t.id === taskId 
-            ? {
-                ...t,
-                suggestions: t.suggestions?.map((s) =>
-                  s.id === suggestionId
-                    ? { ...s, replies: [...(s.replies || []), reply] }
-                    : s
-                )
-              }
-            : t
-        )
-      })),
+      addReplyToSuggestion: (taskId, suggestionId, reply) => {
+        set((state) => ({
+          tasks: state.tasks.map((t) => 
+            t.id === taskId 
+              ? {
+                  ...t,
+                  suggestions: t.suggestions?.map((s) =>
+                    s.id === suggestionId
+                      ? { ...s, replies: [...(s.replies || []), reply] }
+                      : s
+                  )
+                }
+              : t
+          )
+        }))
+        addReplyToSupabase(reply)
+      },
       
       adoptSuggestion: (taskId, suggestionId) => {
         const state = get()
@@ -246,6 +413,7 @@ export const useAppStore = create<AppState>()(
               : t
           )
         }))
+        updateSuggestionInSupabase(suggestionId, { is_adopted: true })
         
         // 创建提案
         const proposal: Proposal = {
@@ -281,19 +449,28 @@ export const useAppStore = create<AppState>()(
       
       // 提案操作
       proposals: [],
-      addProposal: (proposal) => set((state) => ({ 
-        proposals: [proposal, ...state.proposals] 
-      })),
+      addProposal: (proposal) => {
+        set((state) => ({ 
+          proposals: [proposal, ...state.proposals] 
+        }))
+        addProposalToSupabase(proposal)
+      },
       
-      updateProposal: (id, updates) => set((state) => ({
-        proposals: state.proposals.map((p) => 
-          p.id === id ? { ...p, ...updates } : p
-        )
-      })),
+      updateProposal: (id, updates) => {
+        set((state) => ({
+          proposals: state.proposals.map((p) => 
+            p.id === id ? { ...p, ...updates } : p
+          )
+        }))
+        updateProposalInSupabase(id, updates)
+      },
       
-      deleteProposal: (id) => set((state) => ({
-        proposals: state.proposals.filter((p) => p.id !== id)
-      })),
+      deleteProposal: (id) => {
+        set((state) => ({
+          proposals: state.proposals.filter((p) => p.id !== id)
+        }))
+        deleteProposalFromSupabase(id)
+      },
       
       startVoting: (proposalId) => {
         const proposal = get().proposals.find((p) => p.id === proposalId)
@@ -335,6 +512,7 @@ export const useAppStore = create<AppState>()(
               : p
           )
         }))
+        addVoteToSupabase(vote)
         
         // 检查投票状态
         get().checkProposalStatus(proposalId)
@@ -397,23 +575,45 @@ export const useAppStore = create<AppState>()(
       
       // 通知操作
       notifications: [],
-      addNotification: (notification) => set((state) => ({ 
-        notifications: [notification, ...state.notifications] 
-      })),
+      addNotification: (notification) => {
+        set((state) => ({ 
+          notifications: [notification, ...state.notifications] 
+        }))
+        addNotificationToSupabase(notification)
+      },
       
-      markNotificationAsRead: (id) => set((state) => ({
-        notifications: state.notifications.map((n) => 
-          n.id === id ? { ...n, is_read: true } : n
-        )
-      })),
+      markNotificationAsRead: (id) => {
+        set((state) => ({
+          notifications: state.notifications.map((n) => 
+            n.id === id ? { ...n, is_read: true } : n
+          )
+        }))
+        updateNotificationInSupabase(id, { is_read: true })
+      },
       
-      markAllNotificationsAsRead: () => set((state) => ({
-        notifications: state.notifications.map((n) => ({ ...n, is_read: true }))
-      })),
+      markAllNotificationsAsRead: () => {
+        const currentUserId = get().currentUser?.id
+        if (!currentUserId) return
+        
+        set((state) => ({
+          notifications: state.notifications.map((n) => 
+            n.user_id === currentUserId ? { ...n, is_read: true } : n
+          )
+        }))
+        
+        // 批量更新 Supabase
+        const unreadIds = get().notifications
+          .filter(n => n.user_id === currentUserId && !n.is_read)
+          .map(n => n.id)
+        unreadIds.forEach(id => updateNotificationInSupabase(id, { is_read: true }))
+      },
       
-      deleteNotification: (id) => set((state) => ({
-        notifications: state.notifications.filter((n) => n.id !== id)
-      })),
+      deleteNotification: (id) => {
+        set((state) => ({
+          notifications: state.notifications.filter((n) => n.id !== id)
+        }))
+        deleteNotificationFromSupabase(id)
+      },
       
       getUnreadCount: () => {
         return get().notifications.filter((n) => !n.is_read).length
@@ -425,6 +625,7 @@ export const useAppStore = create<AppState>()(
         set((state) => ({ 
           feedbacks: [feedback, ...state.feedbacks] 
         }))
+        addFeedbackToSupabase(feedback)
         
         // 给超级管理员发送通知
         const notification: Notification = {
@@ -440,14 +641,41 @@ export const useAppStore = create<AppState>()(
         }
         get().addNotification(notification)
       },
-      updateFeedback: (id, updates) => set((state) => ({
-        feedbacks: state.feedbacks.map((f) => 
-          f.id === id ? { ...f, ...updates, updated_at: new Date().toISOString() } : f
-        )
-      })),
-      deleteFeedback: (id) => set((state) => ({
-        feedbacks: state.feedbacks.filter((f) => f.id !== id)
-      })),
+      updateFeedback: (id, updates) => {
+        const state = get()
+        const feedback = state.feedbacks.find(f => f.id === id)
+        if (!feedback) return
+
+        const now = new Date().toISOString()
+        set((state) => ({
+          feedbacks: state.feedbacks.map((f) => 
+            f.id === id ? { ...f, ...updates, updated_at: now } : f
+          )
+        }))
+        updateFeedbackInSupabase(id, { ...updates, updated_at: now })
+
+        // 如果是回复反馈，给提交者发送通知
+        if (updates.reply && updates.reply !== feedback.reply) {
+          const notification: Notification = {
+            id: crypto.randomUUID(),
+            user_id: feedback.user_id,
+            type: 'reply_received',
+            title: '您的反馈收到回复',
+            content: `管理员回复了您的反馈："${feedback.content.substring(0, 20)}${feedback.content.length > 20 ? '...' : ''}"`,
+            is_read: false,
+            link_type: 'feedback',
+            link_id: feedback.id,
+            created_at: now,
+          }
+          get().addNotification(notification)
+        }
+      },
+      deleteFeedback: (id) => {
+        set((state) => ({
+          feedbacks: state.feedbacks.filter((f) => f.id !== id)
+        }))
+        deleteFeedbackFromSupabase(id)
+      },
       
       // 通知状态
       notification: null,
@@ -466,12 +694,6 @@ export const useAppStore = create<AppState>()(
       name: 'campus-task-store',
       partialize: (state) => ({
         currentUser: state.currentUser,
-        users: state.users,
-        tasks: state.tasks,
-        archivedTasks: state.archivedTasks,
-        feedbacks: state.feedbacks,
-        proposals: state.proposals,
-        notifications: state.notifications,
       }),
     }
   )

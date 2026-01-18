@@ -9,16 +9,28 @@ import { LoginForm } from "@/components/login-form"
 import { ArchiveModal } from "@/components/archive-modal"
 import { UserManageModal } from "@/components/user-manage-modal"
 import { FeedbackForm } from "@/components/feedback-form"
+import { FeedbackDetailModal } from "@/components/feedback-detail-modal"
 import { NotificationCenter } from "@/components/notification-center"
 import { ProposalPage } from "@/components/proposal-page"
 import { Toast } from "@/components/ui/toast"
 import { Button } from "@/components/ui/button"
 import { PageLoader } from "@/components/ui/spinner"
 import { useAppStore } from "@/store"
+import { subscribeToTable } from "@/lib/supabase-sync"
 import type { Task, Proposal } from "@/types"
 
 export default function HomePage() {
-  const { currentUser, tasks, proposals, searchQuery, isLoading, setIsLoading, addTask } = useAppStore()
+  const { 
+    currentUser, 
+    tasks, 
+    proposals, 
+    searchQuery, 
+    isLoading, 
+    setIsLoading, 
+    addTask, 
+    initializeFromSupabase,
+    syncAllData
+  } = useAppStore()
   
   const [currentView, setCurrentView] = React.useState<'tasks' | 'proposals'>('tasks')
   const [showTaskForm, setShowTaskForm] = React.useState(false)
@@ -27,16 +39,23 @@ export default function HomePage() {
   const [showUserManageModal, setShowUserManageModal] = React.useState(false)
   const [showFeedbackForm, setShowFeedbackForm] = React.useState(false)
   const [showNotificationCenter, setShowNotificationCenter] = React.useState(false)
+  const [showFeedbackDetail, setShowFeedbackDetail] = React.useState(false)
+  const [selectedFeedbackId, setSelectedFeedbackId] = React.useState<string | null>(null)
   const [editingTask, setEditingTask] = React.useState<Task | null>(null)
   const [mounted, setMounted] = React.useState(false)
   
-  // 处理客户端挂载
+  // 处理客户端挂载和 Supabase 初始化
   React.useEffect(() => {
-    setMounted(true)
-    
-    // 初始化示例任务（仅首次）
-    const hasInitialized = localStorage.getItem('tasks-initialized')
-    if (!hasInitialized && tasks.length === 0) {
+    const initialize = async () => {
+      setMounted(true)
+      
+      // 从 Supabase 加载数据
+      await initializeFromSupabase()
+      
+      // 如果没有配置 Supabase,初始化示例任务(仅首次)
+      const hasInitialized = localStorage.getItem('tasks-initialized')
+      const currentTasks = useAppStore.getState().tasks
+      if (!hasInitialized && currentTasks.length === 0) {
       const demoTasks: Task[] = [
         {
           id: crypto.randomUUID(),
@@ -110,8 +129,25 @@ export default function HomePage() {
       
       demoTasks.forEach(task => addTask(task))
       localStorage.setItem('tasks-initialized', 'true')
+      }
     }
-  }, [])
+    
+    initialize()
+  }, [initializeFromSupabase, addTask])
+  
+  // 实时同步
+  React.useEffect(() => {
+    const tables = ['tasks', 'questions', 'suggestions', 'replies', 'proposals', 'votes', 'notifications', 'feedbacks']
+    const subscriptions = tables.map(table => 
+      subscribeToTable(table, () => {
+        syncAllData()
+      })
+    )
+
+    return () => {
+      subscriptions.forEach(sub => sub?.unsubscribe())
+    }
+  }, [syncAllData])
   
   // 过滤任务/提案
   const filteredItems = React.useMemo(() => {
@@ -172,8 +208,9 @@ export default function HomePage() {
         }
       }, 100)
     } else if (linkType === 'feedback' && linkId) {
-      // 反馈只有超管能看，打开用户管理或反馈列表
-      // 暂时不实现，保留接口
+      // 打开反馈详情弹窗
+      setSelectedFeedbackId(linkId)
+      setShowFeedbackDetail(true)
     }
   }
   
@@ -306,6 +343,15 @@ export default function HomePage() {
         isOpen={showNotificationCenter}
         onClose={() => setShowNotificationCenter(false)}
         onNavigate={handleNavigateFromNotification}
+      />
+      
+      <FeedbackDetailModal
+        isOpen={showFeedbackDetail}
+        onClose={() => {
+          setShowFeedbackDetail(false)
+          setSelectedFeedbackId(null)
+        }}
+        feedbackId={selectedFeedbackId || ''}
       />
     </div>
   )
