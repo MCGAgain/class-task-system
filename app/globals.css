@@ -1,0 +1,254 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* 校园风清爽配色 - 低饱和度蓝/青色 */
+    --background: 210 25% 98%;
+    --foreground: 220 20% 20%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 20%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 20%;
+    
+    /* 主色调 - 清爽蓝色 */
+    --primary: 200 75% 50%;
+    --primary-foreground: 0 0% 100%;
+    --primary-light: 200 75% 95%;
+    
+    /* 辅助色 */
+    --secondary: 210 20% 96%;
+    --secondary-foreground: 220 20% 30%;
+    
+    /* 静音色 */
+    --muted: 210 15% 94%;
+    --muted-foreground: 220 10% 50%;
+    
+    /* 强调色 - 用于置顶等高亮 */
+    --accent: 45 90% 55%;
+    --accent-foreground: 45 90% 20%;
+    
+    /* 成功色 */
+    --success: 160 60% 45%;
+    --success-foreground: 0 0% 100%;
+    
+    /* 警告色 */
+    --warning: 35 90% 55%;
+    --warning-foreground: 35 90% 20%;
+    
+    /* 危险色 */
+    --destructive: 0 70% 55%;
+    --destructive-foreground: 0 0% 100%;
+    
+    /* 边框和输入 */
+    --border: 210 20% 90%;
+    --input: 210 20% 92%;
+    --ring: 200 75% 50%;
+    
+    /* 圆角 - 圆润设计 */
+    --radius: 0.75rem;
+    --radius-lg: 1rem;
+    --radius-xl: 1.25rem;
+    
+    /* 阴影 */
+    --shadow-sm: 0 2px 8px -2px hsl(220 20% 20% / 0.08);
+    --shadow-md: 0 4px 16px -4px hsl(220 20% 20% / 0.12);
+    --shadow-lg: 0 8px 32px -8px hsl(220 20% 20% / 0.16);
+    --shadow-hover: 0 12px 40px -12px hsl(220 20% 20% / 0.2);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  
+  /* 全局平滑过渡 */
+  button, a, input, textarea, select {
+    @apply transition-all duration-300 ease-out;
+  }
+}
+
+@layer components {
+  /* 卡片悬浮效果 */
+  .card-hover {
+    @apply transition-all duration-300 ease-out;
+  }
+  
+  .card-hover:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-hover);
+  }
+  
+  /* 输入框聚焦发光效果 */
+  .input-glow:focus {
+    box-shadow: 0 0 0 3px hsl(var(--primary) / 0.15);
+  }
+  
+  /* 置顶任务高亮边框 */
+  .pinned-highlight {
+    border-left: 4px solid hsl(var(--accent));
+    background: linear-gradient(90deg, hsl(var(--accent) / 0.08) 0%, transparent 100%);
+  }
+  
+  /* 进行中状态标签 */
+  .status-in-progress {
+    background: linear-gradient(135deg, hsl(var(--primary) / 0.15) 0%, hsl(var(--primary) / 0.05) 100%);
+    color: hsl(var(--primary));
+  }
+  
+  /* 待完成状态标签 */
+  .status-pending {
+    background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+  }
+  
+  /* 加载动画 */
+  .spinner {
+    @apply animate-spin rounded-full border-2 border-muted border-t-primary;
+  }
+  
+  /* 淡入动画 */
+  .animate-fade-in {
+    animation: fadeIn 0.4s ease-out forwards;
+  }
+  
+  /* 淡出收缩动画 */
+  .animate-fade-out {
+    animation: fadeOut 0.3s ease-out forwards;
+  }
+  
+  /* 滑入动画 */
+  .animate-slide-in {
+    animation: slideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  
+  /* 弹窗动画 */
+  .animate-modal-in {
+    animation: modalIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  
+  .animate-modal-out {
+    animation: modalOut 0.2s ease-out forwards;
+  }
+  
+  /* Toast 通知动画 */
+  .animate-toast-in {
+    animation: toastIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+  
+  .animate-toast-out {
+    animation: toastOut 0.3s ease-out forwards;
+  }
+}
+
+@layer utilities {
+  /* 玻璃态效果 */
+  .glass {
+    backdrop-filter: blur(12px);
+    background: hsl(var(--background) / 0.8);
+  }
+  
+  /* 滚动条美化 */
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.5);
+  }
+}
+
+/* 关键帧动画 */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes modalOut {
+  from {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.95) translateY(-10px);
+  }
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes toastOut {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
+}
