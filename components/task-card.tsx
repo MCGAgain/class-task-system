@@ -1,14 +1,14 @@
 'use client'
 
 import * as React from "react"
-import { Pin, PinOff, Trash2, CheckCircle, Clock, PlayCircle, MessageCircle, Lightbulb, ChevronDown, ChevronUp, Edit3 } from "lucide-react"
+import { Pin, PinOff, Trash2, CheckCircle, Clock, PlayCircle, MessageCircle, Lightbulb, ChevronDown, ChevronUp, Edit3, Reply as ReplyIcon, Archive } from "lucide-react"
 import { cn, formatRelativeTime } from "@/lib/utils"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import { useAppStore } from "@/store"
-import type { Task, TaskStatus, Question, Suggestion } from "@/types"
+import type { Task, TaskStatus, Question, Suggestion, Reply, Notification } from "@/types"
 
 interface TaskCardProps {
   task: Task
@@ -16,11 +16,25 @@ interface TaskCardProps {
 }
 
 export function TaskCard({ task, onEdit }: TaskCardProps) {
-  const { currentUser, togglePinTask, updateTaskStatus, archiveTask, addQuestion, addSuggestion, showNotification } = useAppStore()
+  const { 
+    currentUser, 
+    togglePinTask, 
+    updateTaskStatus, 
+    archiveTask, 
+    addQuestion, 
+    addSuggestion, 
+    addReplyToQuestion,
+    addReplyToSuggestion,
+    adoptSuggestion,
+    addNotification,
+    showNotification 
+  } = useAppStore()
   
   const [isExpanded, setIsExpanded] = React.useState(false)
   const [questionInput, setQuestionInput] = React.useState('')
   const [suggestionInput, setSuggestionInput] = React.useState('')
+  const [replyInput, setReplyInput] = React.useState<{[key: string]: string}>({})
+  const [replyingTo, setReplyingTo] = React.useState<{id: string, type: 'question' | 'suggestion', userName?: string} | null>(null)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [isRemoving, setIsRemoving] = React.useState(false)
   
@@ -82,6 +96,7 @@ export function TaskCard({ task, onEdit }: TaskCardProps) {
       user_name: currentUser.name,
       content: suggestionInput.trim(),
       created_at: new Date().toISOString(),
+      is_adopted: false,
     }
     
     setTimeout(() => {
@@ -90,6 +105,60 @@ export function TaskCard({ task, onEdit }: TaskCardProps) {
       setIsSubmitting(false)
       showNotification('意见已提交', 'success')
     }, 300)
+  }
+  
+  const handleReply = (parentId: string, parentType: 'question' | 'suggestion', parentUserId: string, parentUserName: string) => {
+    const input = replyInput[parentId]?.trim()
+    if (!input || !currentUser) return
+    
+    setIsSubmitting(true)
+    
+    const reply: Reply = {
+      id: crypto.randomUUID(),
+      parent_id: parentId,
+      parent_type: parentType,
+      user_id: currentUser.id,
+      user_name: currentUser.name,
+      content: input,
+      reply_to: replyingTo?.userName,
+      created_at: new Date().toISOString(),
+    }
+    
+    setTimeout(() => {
+      if (parentType === 'question') {
+        addReplyToQuestion(task.id, parentId, reply)
+      } else {
+        addReplyToSuggestion(task.id, parentId, reply)
+      }
+      
+      // 发送通知给被回复者
+      if (parentUserId !== currentUser.id) {
+        const notification: Notification = {
+          id: crypto.randomUUID(),
+          user_id: parentUserId,
+          type: 'reply_received',
+          title: '收到新回复',
+          content: `${currentUser.name} 回复了您在任务"${task.title}"中的${parentType === 'question' ? '提问' : '建议'}`,
+          is_read: false,
+          link_type: 'task',
+          link_id: task.id,
+          created_at: new Date().toISOString(),
+        }
+        addNotification(notification)
+      }
+      
+      setReplyInput(prev => ({ ...prev, [parentId]: '' }))
+      setReplyingTo(null)
+      setIsSubmitting(false)
+      showNotification('回复已提交', 'success')
+    }, 300)
+  }
+  
+  const handleAdoptSuggestion = (suggestionId: string) => {
+    const proposal = adoptSuggestion(task.id, suggestionId)
+    if (proposal) {
+      showNotification('建议已收纳为提案', 'success')
+    }
   }
   
   return (
@@ -209,14 +278,80 @@ export function TaskCard({ task, onEdit }: TaskCardProps) {
             
             {/* 提问列表 */}
             {task.questions && task.questions.length > 0 && (
-              <div className="space-y-2 mb-3">
+              <div className="space-y-3 mb-3">
                 {task.questions.map((q) => (
-                  <div key={q.id} className="p-3 bg-secondary/50 rounded-lg">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-medium">{q.user_name}</span>
-                      <span className="text-xs text-muted-foreground">{formatRelativeTime(q.created_at)}</span>
+                  <div key={q.id} className="space-y-2">
+                    <div className="p-3 bg-secondary/50 rounded-lg">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium">{q.user_name}</span>
+                          <span className="text-xs text-muted-foreground">{formatRelativeTime(q.created_at)}</span>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setReplyingTo({ id: q.id, type: 'question', userName: q.user_name })
+                            setReplyInput(prev => ({ ...prev, [q.id]: prev[q.id] || '' }))
+                          }}
+                          className="gap-1 h-6 px-2 text-xs"
+                        >
+                          <ReplyIcon className="w-3 h-3" />
+                          回复
+                        </Button>
+                      </div>
+                      <p className="text-sm text-foreground/80">{q.content}</p>
                     </div>
-                    <p className="text-sm text-foreground/80">{q.content}</p>
+                    
+                    {/* 回复列表 */}
+                    {q.replies && q.replies.length > 0 && (
+                      <div className="ml-6 space-y-2">
+                        {q.replies.map((r) => (
+                          <div key={r.id} className="p-2 bg-secondary/30 rounded-lg">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xs font-medium">{r.user_name}</span>
+                              {r.reply_to && (
+                                <>
+                                  <span className="text-xs text-muted-foreground">回复</span>
+                                  <span className="text-xs font-medium text-primary">{r.reply_to}</span>
+                                </>
+                              )}
+                              <span className="text-xs text-muted-foreground">{formatRelativeTime(r.created_at)}</span>
+                            </div>
+                            <p className="text-sm text-foreground/80">{r.content}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {/* 回复输入框 */}
+                    {currentUser && replyingTo?.id === q.id && (
+                      <div className="ml-6 space-y-2 animate-fade-in">
+                        <Textarea
+                          placeholder={`回复 ${replyingTo.userName}...`}
+                          value={replyInput[q.id] || ''}
+                          onChange={(e) => setReplyInput(prev => ({ ...prev, [q.id]: e.target.value }))}
+                          maxLength={200}
+                          className="min-h-[60px]"
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() => handleReply(q.id, 'question', q.user_id, q.user_name)}
+                            disabled={!replyInput[q.id]?.trim() || isSubmitting}
+                          >
+                            提交回复
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setReplyingTo(null)}
+                          >
+                            取消
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -253,14 +388,96 @@ export function TaskCard({ task, onEdit }: TaskCardProps) {
             
             {/* 意见列表 */}
             {task.suggestions && task.suggestions.length > 0 && (
-              <div className="space-y-2 mb-3">
+              <div className="space-y-3 mb-3">
                 {task.suggestions.map((s) => (
-                  <div key={s.id} className="p-3 bg-accent/10 rounded-lg">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-medium">{s.user_name}</span>
-                      <span className="text-xs text-muted-foreground">{formatRelativeTime(s.created_at)}</span>
+                  <div key={s.id} className="space-y-2">
+                    <div className="p-3 bg-accent/10 rounded-lg">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium">{s.user_name}</span>
+                          <span className="text-xs text-muted-foreground">{formatRelativeTime(s.created_at)}</span>
+                          {s.is_adopted && (
+                            <Badge variant="success" className="text-xs">已收纳</Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {isAdmin && !s.is_adopted && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleAdoptSuggestion(s.id)}
+                              className="gap-1 h-6 px-2 text-xs text-success hover:text-success"
+                            >
+                              <Archive className="w-3 h-3" />
+                              收纳
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setReplyingTo({ id: s.id, type: 'suggestion', userName: s.user_name })
+                              setReplyInput(prev => ({ ...prev, [s.id]: prev[s.id] || '' }))
+                            }}
+                            className="gap-1 h-6 px-2 text-xs"
+                          >
+                            <ReplyIcon className="w-3 h-3" />
+                            回复
+                          </Button>
+                        </div>
+                      </div>
+                      <p className="text-sm text-foreground/80">{s.content}</p>
                     </div>
-                    <p className="text-sm text-foreground/80">{s.content}</p>
+                    
+                    {/* 回复列表 */}
+                    {s.replies && s.replies.length > 0 && (
+                      <div className="ml-6 space-y-2">
+                        {s.replies.map((r) => (
+                          <div key={r.id} className="p-2 bg-accent/5 rounded-lg">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xs font-medium">{r.user_name}</span>
+                              {r.reply_to && (
+                                <>
+                                  <span className="text-xs text-muted-foreground">回复</span>
+                                  <span className="text-xs font-medium text-primary">{r.reply_to}</span>
+                                </>
+                              )}
+                              <span className="text-xs text-muted-foreground">{formatRelativeTime(r.created_at)}</span>
+                            </div>
+                            <p className="text-sm text-foreground/80">{r.content}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {/* 回复输入框 */}
+                    {currentUser && replyingTo?.id === s.id && (
+                      <div className="ml-6 space-y-2 animate-fade-in">
+                        <Textarea
+                          placeholder={`回复 ${replyingTo.userName}...`}
+                          value={replyInput[s.id] || ''}
+                          onChange={(e) => setReplyInput(prev => ({ ...prev, [s.id]: e.target.value }))}
+                          maxLength={200}
+                          className="min-h-[60px]"
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() => handleReply(s.id, 'suggestion', s.user_id, s.user_name)}
+                            disabled={!replyInput[s.id]?.trim() || isSubmitting}
+                          >
+                            提交回复
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setReplyingTo(null)}
+                          >
+                            取消
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
